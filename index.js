@@ -44,7 +44,7 @@ function enableCam(event) {
 var model = undefined;
 
 tflite.ObjectDetector.create(
-  "https://tfhub.dev/tensorflow/lite-model/ssd_mobilenet_v1/1/metadata/2?lite-format=tflite"
+  "best.tflite"
 ).then((loadedModel) => {
   model = loadedModel;
   // Show demo section now model is ready to use.
