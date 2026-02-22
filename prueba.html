@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>YOLO TFLite Web</title>
+
+<style>
+body{
+    font-family: Arial;
+    text-align:center;
+}
+canvas{
+    border:2px solid black;
+    margin-top:20px;
+    max-width:90%;
+}
+</style>
+
+<!-- SOLO esto -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.16.0"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.9"></script>
+
+</head>
+<body>
+
+<h2>Detector YOLO TensorFlow Lite</h2>
+
+<input type="file" id="imageInput">
+<br>
+<canvas id="canvas"></canvas>
+
+<script>
+
+let model;
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+async function loadModel(){
+    model = await tflite.loadTFLiteModel("best.tflite");
+    console.log("Modelo TFLite cargado");
+}
+
+loadModel();
+
+document.getElementById("imageInput").addEventListener("change", async (e)=>{
+
+    if(!model){
+        alert("Modelo aún no carga");
+        return;
+    }
+
+    const file = e.target.files[0];
+    const img = new Image();
+    img.src = URL.createObjectURL(file);
+
+    img.onload = async ()=>{
+
+        canvas.width = img.width;
+        canvas.height = img.height;
+        ctx.drawImage(img,0,0);
+
+        const inputTensor = tf.browser.fromPixels(img)
+            .resizeNearestNeighbor([640,640])
+            .toFloat()
+            .div(255.0)
+            .expandDims(0);
+
+        const outputs = model.predict(inputTensor);
+
+        const boxes = outputs[0].arraySync()[0];
+        const scores = outputs[1].arraySync()[0];
+        const classes = outputs[2].arraySync()[0];
+        const count = outputs[3].arraySync()[0];
+
+        console.log("Detections:", count);
+
+        for(let i=0; i<count; i++){
+
+            if(scores[i] > 0.5){
+
+                const [ymin, xmin, ymax, xmax] = boxes[i];
+
+                const x = xmin * img.width;
+                const y = ymin * img.height;
+                const w = (xmax - xmin) * img.width;
+                const h = (ymax - ymin) * img.height;
+
+                ctx.strokeStyle = "red";
+                ctx.lineWidth = 2;
+                ctx.strokeRect(x, y, w, h);
+
+                ctx.fillStyle = "red";
+                ctx.fillText(
+                    "Class: " + classes[i] + 
+                    " (" + scores[i].toFixed(2) + ")",
+                    x,
+                    y - 5
+                );
+            }
+        }
+
+        inputTensor.dispose();
+    };
+});
+
+</script>
+
+</body>
+</html>
