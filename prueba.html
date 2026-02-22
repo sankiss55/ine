@@ -2,22 +2,21 @@
 <html lang="es">
 <head>
     <meta charset="utf-8">
-    <title>YOLO TFLite - Detección en Vivo</title>
+    <title>YOLO en la Web - Detección Pura</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <h1>Detección de Objetos YOLO (MediaPipe/TFLite)</h1>
+    <h1>YOLO vía TensorFlow.js</h1>
 
-    <section id="demos" class="invisible">
-        <p>Habilita la cámara para detectar los objetos de tu modelo entrenado.</p>
-        
+    <section id="demos">
+        <p>Habilita la cámara para detectar objetos.</p>
         <div id="liveView" class="camView" style="position: relative;">
             <button id="webcamButton">HABILITAR WEBCAM</button>
-            <video id="webcam" autoplay playsinline></video>
+            <video id="webcam" autoplay playsinline width="640" height="480"></video>
         </div>
     </section>
 
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3" type="text/javascript"></script>
-    <script type="module" src="index.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
+    <script src="index.js"></script>
 </body>
 </html>
