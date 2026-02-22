@@ -1,22 +1,25 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="utf-8">
-    <title>YOLO en la Web - Detección Pura</title>
-    <link rel="stylesheet" href="style.css">
+    <meta charset="UTF-8">
+    <title>Detección YOLO - Subir Imagen</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <style>
+        .container { position: relative; margin-top: 20px; }
+        canvas { position: absolute; left: 0; top: 0; }
+        #imagePreview { max-width: 500px; display: block; }
+    </style>
 </head>
 <body>
-    <h1>YOLO vía TensorFlow.js</h1>
+    <h1>Analizar Imagen con YOLO</h1>
+    <input type="file" id="fileInput" accept="image/*">
+    <p id="status">Cargando modelo...</p>
 
-    <section id="demos">
-        <p>Habilita la cámara para detectar objetos.</p>
-        <div id="liveView" class="camView" style="position: relative;">
-            <button id="webcamButton">HABILITAR WEBCAM</button>
-            <video id="webcam" autoplay playsinline width="640" height="480"></video>
-        </div>
-    </section>
+    <div class="container">
+        <img id="imagePreview" />
+        <canvas id="canvas"></canvas>
+    </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
     <script type="module" src="index.js"></script>
 </body>
 </html>
