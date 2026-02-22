@@ -5,69 +5,119 @@ const imagePreview = document.getElementById('imagePreview');
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 
-// 1. Cargar el modelo al iniciar
+// 1. Configurar Motor (GPU vs CPU) y Cargar Modelo
 async function loadModel() {
     try {
-        // Forzamos CPU si WebGL da problemas (puedes quitarlo si arreglas WebGL)
-        await tf.setBackend('cpu'); 
+        // Intentamos usar WebGL (GPU)
+        await tf.ready();
+        console.log("Backend actual:", tf.getBackend());
         
         const modelUrl = "https://sankiss55.github.io/ine/best_web_model/model.json";
+        
+        // Cargamos el modelo
+        status.innerText = "Cargando modelo... por favor espera.";
         model = await tf.loadGraphModel(modelUrl);
         
-        status.innerText = "Modelo listo. Sube una imagen.";
+        status.innerText = "¡Modelo listo! Sube una imagen.";
         fileInput.disabled = false;
     } catch (err) {
-        status.innerText = "Error al cargar modelo. Revisa la consola.";
+        status.innerText = "Error al iniciar: " + err.message;
         console.error(err);
     }
 }
 
-// 2. Procesar la imagen cuando el usuario la selecciona
-fileInput.addEventListener('change', async (e) => {
+// 2. Manejador de archivo
+fileInput.addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
     const reader = new FileReader();
     reader.onload = (f) => {
         imagePreview.src = f.target.result;
-        imagePreview.onload = () => predict(); // Ejecutar detección al cargar imagen
+        // Cuando la imagen termine de cargar visualmente, disparamos la IA
+        imagePreview.onload = () => predict();
     };
     reader.readAsDataURL(file);
 });
-// 3. Ejecutar la predicción
+
+// 3. Predicción y Dibujo
 async function predict() {
-    status.innerText = "Analizando...";
+    if (!model) return;
     
-    // Ajustar canvas al tamaño de la imagen mostrada
+    status.innerText = "Procesando...";
+    
+    // Ajustar resolución del dibujo al tamaño real mostrado
     canvas.width = imagePreview.width;
     canvas.height = imagePreview.height;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Preprocesamiento de la imagen CORREGIDO
+    // Preprocesamiento (Ajustado a 640x640 para YOLO)
     const tensor = tf.tidy(() => {
         return tf.browser.fromPixels(imagePreview)
-                  .resizeNearestNeighbor([640, 640]) 
-                  .cast('float32') // <--- CAMBIO AQUÍ
+                  .resizeNearestNeighbor([640, 640])
+                  .cast('float32')
                   .expandDims(0)
                   .div(255.0);
     });
 
     try {
-        const predictions = await model.executeAsync(tensor);
-        console.log("Resultado del modelo:", predictions);
-        status.innerText = "Detección completada. Revisa los datos en la consola.";
+        // Ejecución en GPU (si está disponible)
+        const result = await model.executeAsync(tensor);
         
-        // Limpieza de memoria
-        if (Array.isArray(predictions)) {
-            predictions.forEach(p => p.dispose());
-        } else {
-            predictions.dispose();
+        // Basado en tus logs: result[0] tiene forma [1, 300, 6]
+        const boxesData = result[0].dataSync(); 
+        const numDetections = result[0].shape[1];
+
+        let found = false;
+        for (let i = 0; i < numDetections; i++) {
+            const index = i * 6;
+            const x1 = boxesData[index];
+            const y1 = boxesData[index + 1];
+            const x2 = boxesData[index + 2];
+            const y2 = boxesData[index + 3];
+            const score = boxesData[index + 4];
+            const classId = boxesData[index + 5];
+
+            // Umbral de confianza: 0.4 (40%)
+            if (score > 0.4) {
+                found = true;
+                drawBoundingBox(x1, y1, x2, y2, score, classId);
+            }
         }
+
+        status.innerText = found ? "Detección finalizada." : "No se detectaron objetos claros.";
+
+        // Limpiar tensores de salida
+        result.forEach(t => t.dispose());
     } catch (err) {
-        console.error("Error en la ejecución del modelo:", err);
-        status.innerText = "Error al procesar la imagen.";
+        console.error("Error en predicción:", err);
+        status.innerText = "Error al analizar.";
     }
 
     tensor.dispose();
 }
+
+// 4. Función para pintar los cuadros
+function drawBoundingBox(x1, y1, x2, y2, score, classId) {
+    // Escalar de 640x640 al tamaño del preview
+    const scaleX = canvas.width / 640;
+    const scaleY = canvas.height / 640;
+
+    const x = x1 * scaleX;
+    const y = y1 * scaleY;
+    const w = (x2 - x1) * scaleX;
+    const h = (y2 - y1) * scaleY;
+
+    // Dibujar rectángulo
+    ctx.strokeStyle = "#00FF00";
+    ctx.lineWidth = 4;
+    ctx.strokeRect(x, y, w, h);
+
+    // Dibujar etiqueta
+    ctx.fillStyle = "#00FF00";
+    ctx.font = "bold 16px Arial";
+    const label = `Clase: ${classId} (${Math.round(score * 100)}%)`;
+    ctx.fillText(label, x, y > 20 ? y - 5 : 20);
+}
+
 loadModel();
