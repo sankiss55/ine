@@ -1,106 +1,114 @@
-// based on https://codelabs.developers.google.com/codelabs/tensorflowjs-object-detection
+import { ObjectDetector, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3";
+
 const video = document.getElementById("webcam");
 const liveView = document.getElementById("liveView");
 const demosSection = document.getElementById("demos");
 const enableWebcamButton = document.getElementById("webcamButton");
 
-// Check if webcam access is supported.
-function getUserMediaSupported() {
+let objectDetector;
+let runningMode = "VIDEO";
+
+// 1. Inicializar el detector de objetos
+const initializeObjectDetector = async () => {
+  const vision = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
+  );
+  
+  objectDetector = await ObjectDetector.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath: "best.tflite", // ASEGÚRATE QUE EL ARCHIVO ESTÉ EN ESTA CARPETA
+      delegate: "GPU"
+    },
+    scoreThreshold: 0.5,
+    runningMode: runningMode
+  });
+  
+  demosSection.classList.remove("invisible");
+};
+
+initializeObjectDetector();
+
+// 2. Revisar soporte de Webcam
+function hasGetUserMedia() {
   return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 }
 
-// If webcam supported, add event listener to button for when user
-// wants to activate it to call enableCam function which we will
-// define in the next step.
-if (getUserMediaSupported()) {
+if (hasGetUserMedia()) {
   enableWebcamButton.addEventListener("click", enableCam);
 } else {
-  console.warn("getUserMedia() is not supported by your browser");
+  console.warn("Tu navegador no soporta getUserMedia()");
 }
 
-// Enable the live webcam view and start classification.
-function enableCam(event) {
-  // Only continue if the COCO-SSD has finished loading.
-  if (!model) {
+// 3. Habilitar Cámara
+async function enableCam(event) {
+  if (!objectDetector) {
+    alert("El modelo aún está cargando...");
     return;
   }
 
-  // Hide the button once clicked.
   event.target.classList.add("removed");
 
-  // getUsermedia parameters to force video but not audio.
-  const constraints = {
-    video: true,
-  };
+  const constraints = { video: true };
 
-  // Activate the webcam stream.
-  navigator.mediaDevices.getUserMedia(constraints).then(function (stream) {
+  navigator.mediaDevices.getUserMedia(constraints).then((stream) => {
     video.srcObject = stream;
     video.addEventListener("loadeddata", predictWebcam);
   });
 }
 
-// Store the resulting model in the global scope of our app.
-var model = undefined;
+let children = [];
 
-tflite.ObjectDetector.create(
-  "best.tflite"
-).then((loadedModel) => {
-  model = loadedModel;
-  // Show demo section now model is ready to use.
-  demosSection.classList.remove("invisible");
-});
+// 4. Predicción en Tiempo Real
+async function predictWebcam() {
+  let startTimeMs = performance.now();
 
-var children = [];
+  // Detectar objetos en el frame del video
+  const detections = await objectDetector.detectForVideo(video, startTimeMs);
 
-function predictWebcam() {
-  const predictions = model.detect(video);
-
-  // Remove any highlighting we did previous frame.
-  for (let i = 0; i < children.length; i++) {
-    liveView.removeChild(children[i]);
+  // Limpiar dibujos anteriores
+  for (let child of children) {
+    liveView.removeChild(child);
   }
   children.splice(0);
 
-  // Now lets loop through predictions and draw them to the live view if
-  // they have a high confidence score.
-  for (let i = 0; i < predictions.length; i++) {
-    const curObject = predictions[i];
-    if (curObject.classes[0].probability > 0.5) {
-      const p = document.createElement("p");
-      p.innerText =
-        curObject.classes[0].className +
-        " - with " +
-        Math.round(parseFloat(curObject.classes[0].probability) * 100) +
-        "% confidence.";
-      p.style =
-        "margin-left: " +
-        curObject.boundingBox.originX +
-        "px; margin-top: " +
-        (curObject.boundingBox.originY - 10) +
-        "px; width: " +
-        (curObject.boundingBox.width - 10) +
-        "px; top: 0; left: 0;";
+  // Dibujar resultados
+  for (let detection of detections.detections) {
+    const p = document.createElement("p");
+    p.innerText = 
+      detection.categories[0].categoryName + 
+      " - " + Math.round(parseFloat(detection.categories[0].score) * 100) + "%";
+    
+    // Posicionamiento de la etiqueta
+    p.style = `
+      left: ${detection.boundingBox.originX}px; 
+      top: ${detection.boundingBox.originY - 30}px; 
+      width: ${detection.boundingBox.width}px;
+      position: absolute;
+      background-color: #007bff;
+      color: white;
+      margin: 0;
+      padding: 5px;
+      font-size: 12px;
+      z-index: 2;
+    `;
 
-      const highlighter = document.createElement("div");
-      highlighter.setAttribute("class", "highlighter");
-      highlighter.style =
-        "left: " +
-        curObject.boundingBox.originX +
-        "px; top: " +
-        curObject.boundingBox.originY +
-        "px; width: " +
-        curObject.boundingBox.width +
-        "px; height: " +
-        curObject.boundingBox.height +
-        "px;";
+    const highlighter = document.createElement("div");
+    highlighter.setAttribute("class", "highlighter");
+    highlighter.style = `
+      left: ${detection.boundingBox.originX}px; 
+      top: ${detection.boundingBox.originY}px; 
+      width: ${detection.boundingBox.width}px; 
+      height: ${detection.boundingBox.height}px;
+      position: absolute;
+      border: 3px solid #007bff;
+      z-index: 1;
+    `;
 
-      liveView.appendChild(highlighter);
-      liveView.appendChild(p);
-      children.push(highlighter);
-      children.push(p);
-    }
+    liveView.appendChild(highlighter);
+    liveView.appendChild(p);
+    children.push(highlighter);
+    children.push(p);
   }
-  // Call this function again to keep predicting when the browser is ready.
+
   window.requestAnimationFrame(predictWebcam);
 }

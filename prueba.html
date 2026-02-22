@@ -1,29 +1,23 @@
 <!DOCTYPE html>
-<html lang="en">
-  <head>
-    <title>TFLITE Web API Live Object Detection Example</title>
+<html lang="es">
+<head>
     <meta charset="utf-8">
-    <!-- Import the webpage's stylesheet -->
+    <title>YOLO TFLite - Detección en Vivo</title>
     <link rel="stylesheet" href="style.css">
-  </head>  
-  <body>
-    <h1>TFLITE Web API Live Object Detection Example</h1>
-    
-    <section id="demos" class="invisible">
+</head>
+<body>
+    <h1>Detección de Objetos YOLO (MediaPipe/TFLite)</h1>
 
-      <p>Hold some objects up close to your webcam to get a real-time classification! When ready click "enable webcam" below and accept access to the webcam when the browser asks (check the top left of your window)</p>
-      
-      <div id="liveView" class="camView">
-        <button id="webcamButton">Enable Webcam</button>
-        <video id="webcam" autoplay muted width="640" height="480"></video>
-      </div>
+    <section id="demos" class="invisible">
+        <p>Habilita la cámara para detectar los objetos de tu modelo entrenado.</p>
+        
+        <div id="liveView" class="camView" style="position: relative;">
+            <button id="webcamButton">HABILITAR WEBCAM</button>
+            <video id="webcam" autoplay playsinline></video>
+        </div>
     </section>
 
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs/dist/tf.min.js" type="text/javascript"></script>
-    <!-- Load the coco-ssd model to use to recognize things in images -->
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
-
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.8/dist/tf-tflite.min.js"></script>
-    <script src="index.js"></script>
-  </body>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3" type="text/javascript"></script>
+    <script type="module" src="index.js"></script>
+</body>
 </html>
