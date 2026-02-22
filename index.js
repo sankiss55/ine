@@ -34,7 +34,6 @@ fileInput.addEventListener('change', async (e) => {
     };
     reader.readAsDataURL(file);
 });
-
 // 3. Ejecutar la predicción
 async function predict() {
     status.innerText = "Analizando...";
@@ -44,28 +43,31 @@ async function predict() {
     canvas.height = imagePreview.height;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Preprocesamiento de la imagen
+    // Preprocesamiento de la imagen CORREGIDO
     const tensor = tf.tidy(() => {
-        const img = tf.browser.fromPixels(imagePreview);
-        // YOLO suele pedir 640x640 o el tamaño con el que fue entrenado
-        return img.resizeNearestNeighbor([640, 640]) 
-                  .float()
+        return tf.browser.fromPixels(imagePreview)
+                  .resizeNearestNeighbor([640, 640]) 
+                  .cast('float32') // <--- CAMBIO AQUÍ
                   .expandDims(0)
                   .div(255.0);
     });
 
-    // Ejecutar modelo
-    const predictions = await model.executeAsync(tensor);
+    try {
+        const predictions = await model.executeAsync(tensor);
+        console.log("Resultado del modelo:", predictions);
+        status.innerText = "Detección completada. Revisa los datos en la consola.";
+        
+        // Limpieza de memoria
+        if (Array.isArray(predictions)) {
+            predictions.forEach(p => p.dispose());
+        } else {
+            predictions.dispose();
+        }
+    } catch (err) {
+        console.error("Error en la ejecución del modelo:", err);
+        status.innerText = "Error al procesar la imagen.";
+    }
 
-    // NOTA: El procesamiento de 'predictions' depende de cómo exportaste tu YOLO
-    // Aquí un ejemplo genérico de dibujo:
-    console.log("Resultado crudo:", predictions);
-    
-    status.innerText = "Detección completada (Revisa la consola para ver los datos).";
-    
-    // Liberar memoria
     tensor.dispose();
-    predictions.forEach(p => p.dispose());
 }
-
 loadModel();
