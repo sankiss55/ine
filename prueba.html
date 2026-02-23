@@ -2,62 +2,46 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>IA ONNX Vision - Visualizador de Objetos</title>
+    <title>Visualizador de Activación IA</title>
     <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; background: #0f172a; color: white; display: flex; flex-direction: column; align-items: center; padding: 20px; }
-        .card { background: #1e293b; padding: 2rem; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); text-align: center; max-width: 600px; width: 100%; }
-        h1 { color: #38bdf8; margin-bottom: 10px; }
-        .upload-btn { background: #38bdf8; color: #0f172a; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-weight: bold; display: inline-block; transition: 0.3s; margin-bottom: 20px; }
-        #preview { max-width: 100%; border-radius: 10px; display: none; border: 2px solid #334155; margin-bottom: 20px; }
-        
-        /* Estilo para ver el OBJETO de salida */
-        #output-container { 
-            background: #020617; 
-            color: #4ade80; 
-            padding: 15px; 
-            border-radius: 8px; 
-            text-align: left; 
-            font-family: 'Courier New', monospace; 
-            font-size: 0.85rem; 
-            max-height: 300px; 
-            overflow-y: auto; 
-            border: 1px solid #1e293b;
-            display: none;
+        body { font-family: sans-serif; background: #1a1a1a; color: white; text-align: center; }
+        .container { position: relative; display: inline-block; margin-top: 20px; }
+        #preview, #overlay-canvas { 
+            position: absolute; left: 0; top: 0; 
+            width: 640px; height: 640px; border-radius: 8px;
         }
-        .label { color: #94a3b8; margin-bottom: 5px; display: block; }
-        canvas { display: none; }
+        #overlay-canvas { opacity: 0.6; pointer-events: none; } /* Capa transparente arriba */
+        .controls { margin: 20px; padding: 20px; background: #2a2a2a; border-radius: 10px; }
+        .hidden-canvas { display: none; }
+        #status { color: #00ff00; margin: 10px; }
     </style>
 </head>
 <body>
 
-<div class="card">
-    <h1>Analizador ONNX</h1>
-    
-    <label class="upload-btn">
-        Seleccionar Imagen
-        <input type="file" id="fileInput" accept="image/*" style="display:none">
-    </label>
+    <div class="controls">
+        <h1>IA: Mapa de Captura Visual</h1>
+        <p id="status">Cargando modelo...</p>
+        <input type="file" id="fileInput" accept="image/*">
+    </div>
 
-    <img id="preview" alt="Vista previa">
-    
-    <span class="label">Objeto de salida (Inferencia):</span>
-    <div id="output-container"></div>
-    
-    <canvas id="canvas"></canvas>
-</div>
+    <div class="container" id="canvas-container" style="width: 640px; height: 640px;">
+        <img id="preview" src="" style="display:none;">
+        <canvas id="overlay-canvas"></canvas>
+    </div>
+
+    <canvas id="process-canvas" class="hidden-canvas"></canvas>
 
 <script>
-    const MODEL_PATH = './modelo.onnx'; 
-    const WIDTH = 640; 
-    const HEIGHT = 640; 
+    const MODEL_PATH = './modelo.onnx';
+    const WIDTH = 640;
+    const HEIGHT = 640;
     let session;
 
     async function init() {
         try {
             session = await ort.InferenceSession.create(MODEL_PATH, { executionProviders: ['wasm'] });
-            console.log("Modelo cargado.");
+            document.getElementById('status').innerText = "✅ IA Lista. Sube una imagen.";
         } catch (e) {
             alert("Error al cargar modelo: " + e.message);
         }
@@ -71,64 +55,69 @@
             const img = document.getElementById('preview');
             img.src = event.target.result;
             img.style.display = 'block';
-            img.onload = () => procesarImagen(img);
+            img.onload = () => procesarEInyectar(img);
         };
         reader.readAsDataURL(file);
     };
 
-    async function procesarImagen(imgElement) {
-        if (!session) return;
+    async function procesarEInyectar(imgElement) {
+        const status = document.getElementById('status');
+        status.innerText = "🧠 Pensando...";
+
+        const procCanvas = document.getElementById('process-canvas');
+        const ctx = procCanvas.getContext('2d');
+        procCanvas.width = WIDTH;
+        procCanvas.height = HEIGHT;
+        ctx.drawImage(imgElement, 0, 0, WIDTH, HEIGHT);
+
+        const imageData = ctx.getImageData(0, 0, WIDTH, HEIGHT).data;
+        const input = new Float32Array(WIDTH * HEIGHT * 3);
+        for (let i = 0, j = 0; i < imageData.length; i += 4) {
+            input[j] = imageData[i] / 255.0;
+            input[j + WIDTH * HEIGHT] = imageData[i+1] / 255.0;
+            input[j + 2 * WIDTH * HEIGHT] = imageData[i+2] / 255.0;
+            j++;
+        }
 
         try {
-            const canvas = document.getElementById('canvas');
-            const ctx = canvas.getContext('2d');
-            canvas.width = WIDTH;
-            canvas.height = HEIGHT;
-            ctx.drawImage(imgElement, 0, 0, WIDTH, HEIGHT);
-            const imageData = ctx.getImageData(0, 0, WIDTH, HEIGHT).data;
-
-            const inputData = new Float32Array(WIDTH * HEIGHT * 3);
-            for (let i = 0, j = 0; i < imageData.length; i += 4) {
-                inputData[j] = imageData[i] / 255.0;
-                inputData[j + WIDTH * HEIGHT] = imageData[i + 1] / 255.0;
-                inputData[j + 2 * WIDTH * HEIGHT] = imageData[i + 2] / 255.0;
-                j++;
-            }
-
-            const tensor = new ort.Tensor('float32', inputData, [1, 3, HEIGHT, WIDTH]);
-            const feeds = { images: tensor }; 
-            const results = await session.run(feeds);
-
-            // --- AQUÍ CAPTAMOS Y MOSTRAMOS EL OBJETO ---
+            const tensor = new ort.Tensor('float32', input, [1, 3, HEIGHT, WIDTH]);
+            const results = await session.run({ images: tensor });
             const outputKey = Object.keys(results)[0];
             const outputData = results[outputKey].data;
 
-            mostrarObjeto(outputData);
-
-        } catch (error) {
-            alert("Error: " + error.message);
+            // DIBUJAR LO QUE LA IA VE
+            dibujarMapaIA(outputData);
+            status.innerText = "✅ Captura visualizada sobre la imagen.";
+        } catch (err) {
+            alert("Error: " + err.message);
         }
     }
 
-    function mostrarObjeto(data) {
-        const container = document.getElementById('output-container');
-        container.style.display = 'block';
+    function dibujarMapaIA(data) {
+        const canvas = document.getElementById('overlay-canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = WIDTH;
+        canvas.height = HEIGHT;
+
+        // Creamos una nueva imagen basada en los números de la IA
+        const imgOut = ctx.createImageData(WIDTH, HEIGHT);
         
-        // Limpiamos y mostramos los primeros 50 valores para no saturar la pantalla
-        // Si el modelo devuelve texto, aquí es donde deberías aplicar la lógica de decodificación
-        let html = "<strong>Tensor Output (Data):</strong><br>[";
-        const visualData = Array.from(data).slice(0, 50); 
-        
-        html += visualData.map(v => v.toFixed(4)).join(", ");
-        
-        if (data.length > 50) html += "...";
-        html += "]<br><br><strong>Total de valores:</strong> " + data.length;
-        
-        container.innerHTML = html;
+        // El total de valores es 310,800. Esto suele ser una matriz de probabilidad.
+        // Vamos a mapear esos números a colores (Calor: Rojo para valores altos)
+        for (let i = 0; i < WIDTH * HEIGHT; i++) {
+            const valor = data[i]; // El valor de activación de la IA
+            
+            // Si el valor es alto, pintamos en Rojo neón para ver dónde "captó"
+            imgOut.data[i * 4 + 0] = valor > 0.5 ? 255 : 0; // Rojo
+            imgOut.data[i * 4 + 1] = valor * 255;           // Verde (variación)
+            imgOut.data[i * 4 + 2] = 0;                     // Azul
+            imgOut.data[i * 4 + 3] = valor > 0.1 ? 180 : 0; // Opacidad basada en intensidad
+        }
+
+        ctx.putImageData(imgOut, 0, 0);
     }
 
     init();
 </script>
-
 </body>
 </html>
