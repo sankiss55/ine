@@ -2,135 +2,134 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>IA Segmentación ONNX - Visualizador</title>
+    <title>Visualizador Segmentación YOLOv8</title>
     <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; background: #0f172a; color: white; display: flex; flex-direction: column; align-items: center; padding: 20px; }
-        .card { background: #1e293b; padding: 2rem; border-radius: 15px; text-align: center; max-width: 700px; width: 100%; }
-        .image-stack { position: relative; width: 640px; height: 640px; margin: 20px auto; border: 2px solid #38bdf8; border-radius: 8px; background: #000; overflow: hidden; }
-        .stack-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
-        #overlay-canvas { pointer-events: none; mix-blend-mode: screen; }
-        .btn { background: #38bdf8; color: #0f172a; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-weight: bold; display: inline-block; }
-        #status { margin-top: 15px; font-weight: bold; color: #4ade80; }
-        .hidden { display: none; }
+        body { font-family: sans-serif; background: #0f172a; color: white; display: flex; flex-direction: column; align-items: center; padding: 20px; }
+        .card { background: #1e293b; padding: 20px; border-radius: 15px; text-align: center; max-width: 640px; }
+        .image-container { position: relative; width: 640px; height: 640px; background: #000; margin-top: 20px; border: 2px solid #38bdf8; }
+        #preview, #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        #overlay { pointer-events: none; opacity: 0.7; }
+        .btn { background: #38bdf8; color: #0f172a; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: bold; }
     </style>
 </head>
 <body>
 
 <div class="card">
-    <h1>Detector de Segmentación (INE)</h1>
+    <h1>Detector INE (Segmentación)</h1>
     <label class="btn">
-        Subir Imagen de Prueba
+        Seleccionar Imagen
         <input type="file" id="fileInput" accept="image/*" style="display:none">
     </label>
-    <p id="status">Cargando modelo de segmentación...</p>
+    <p id="status">Cargando modelo...</p>
 
-    <div class="image-stack">
-        <img id="preview-image" class="stack-layer">
-        <canvas id="overlay-canvas" class="stack-layer"></canvas>
+    <div class="image-container">
+        <img id="preview">
+        <canvas id="overlay"></canvas>
     </div>
 </div>
-
-<canvas id="process-canvas" class="hidden"></canvas>
 
 <script>
     const WIDTH = 640;
     const HEIGHT = 640;
-    const MODEL_PATH = './modelo.onnx'; 
     let session;
 
     async function init() {
         try {
-            // Se recomienda usar WASM para mayor compatibilidad en modelos de segmentación
-            session = await ort.InferenceSession.create(MODEL_PATH, { executionProviders: ['wasm'] });
-            document.getElementById('status').innerText = "✅ IA Lista. Sube una imagen.";
+            // Usamos WASM para mayor estabilidad con modelos de segmentación
+            session = await ort.InferenceSession.create('./best.onnx', { executionProviders: ['wasm'] });
+            document.getElementById('status').innerText = "✅ Modelo ONNX Cargado";
         } catch (e) {
-            alert("Error al cargar modelo: " + e.message);
+            document.getElementById('status').innerText = "❌ Error: " + e.message;
         }
     }
 
-    document.getElementById('fileInput').onchange = function(e) {
+    document.getElementById('fileInput').onchange = (e) => {
         const file = e.target.files[0];
         if (!file) return;
-        
         const reader = new FileReader();
-        reader.onload = function(event) {
-            const img = document.getElementById('preview-image');
-            img.src = event.target.result;
-            img.onload = () => {
-                 document.getElementById('overlay-canvas').width = WIDTH;
-                 document.getElementById('overlay-canvas').height = HEIGHT;
-                 procesarSegmentacion(img);
-            };
+        reader.onload = (ev) => {
+            const img = document.getElementById('preview');
+            img.src = ev.target.result;
+            img.onload = () => procesar(img);
         };
         reader.readAsDataURL(file);
     };
 
-    async function procesarSegmentacion(imgElement) {
+    async function procesar(imgElement) {
         const status = document.getElementById('status');
-        status.innerText = "🧠 Segmentando...";
+        status.innerText = "🧠 Analizando...";
 
-        const procCanvas = document.getElementById('process-canvas');
-        procCanvas.width = WIDTH;
-        procCanvas.height = HEIGHT;
-        const ctx = procCanvas.getContext('2d');
+        // 1. Crear canvas temporal para redimensionar a 640x640
+        const canvas = document.createElement('canvas');
+        canvas.width = WIDTH;
+        canvas.height = HEIGHT;
+        const ctx = canvas.getContext('2d');
         ctx.drawImage(imgElement, 0, 0, WIDTH, HEIGHT);
-
         const imageData = ctx.getImageData(0, 0, WIDTH, HEIGHT).data;
-        const inputData = new Float32Array(WIDTH * HEIGHT * 3);
-        
-        // Preprocesamiento: CHW format (Channel, Height, Width)
+
+        // 2. Formato BCHW (1, 3, 640, 640)
+        const input = new Float32Array(WIDTH * HEIGHT * 3);
         for (let i = 0, j = 0; i < imageData.length; i += 4) {
-            inputData[j] = imageData[i] / 255.0;
-            inputData[j + WIDTH * HEIGHT] = imageData[i+1] / 255.0;
-            inputData[j + 2 * WIDTH * HEIGHT] = imageData[i+2] / 255.0;
+            input[j] = imageData[i] / 255.0;
+            input[j + WIDTH * HEIGHT] = imageData[i+1] / 255.0;
+            input[j + 2 * WIDTH * HEIGHT] = imageData[i+2] / 255.0;
             j++;
         }
 
         try {
-            const tensor = new ort.Tensor('float32', inputData, [1, 3, HEIGHT, WIDTH]);
-            // Nota: Cambia 'images' por el nombre de entrada de tu modelo si es necesario
+            const tensor = new ort.Tensor('float32', input, [1, 3, HEIGHT, WIDTH]);
             const results = await session.run({ images: tensor });
-            
-            // En modelos de segmentación, la salida suele ser el tensor con mayor tamaño
-            // Buscamos automáticamente la salida que contenga la máscara
-            const outputKey = Object.keys(results).find(key => results[key].data.length > 1000) || Object.keys(results)[0];
-            const outputData = results[outputKey].data;
 
-            dibujarMascara(outputData);
-            status.innerText = "✅ Área captada visualizada.";
+            // 3. Capturar la salida de prototipos (la de 160x160)
+            // Según tu log, es la que tiene 32 * 160 * 160 = 819,200 valores (o similar)
+            const outputNames = Object.keys(results);
+            // Buscamos el tensor que tiene la forma de máscara (normalmente el segundo)
+            const maskData = results[outputNames[1]].data; 
 
+            dibujarMascara(maskData);
+            status.innerText = "✅ INE Detectada";
         } catch (err) {
-            alert("Error en el modelo: " + err.message);
-            status.innerText = "❌ Error en inferencia.";
+            status.innerText = "❌ Error en inferencia";
+            console.error(err);
         }
     }
 
-    function dibujarMascara(data) {
-        const canvas = document.getElementById('overlay-canvas');
+    function dibujarMascara(maskData) {
+        const canvas = document.getElementById('overlay');
         const ctx = canvas.getContext('2d');
-        ctx.clearRect(0,0, WIDTH, HEIGHT);
+        canvas.width = WIDTH;
+        canvas.height = HEIGHT;
+        ctx.clearRect(0, 0, WIDTH, HEIGHT);
 
-        const imgOut = ctx.createImageData(WIDTH, HEIGHT);
-        const rgba = imgOut.data;
+        const imgOut = ctx.createImageData(160, 160); // Tamaño del prototipo
+        
+        // Vamos a promediar las 32 capas de prototipos para ver la "activación"
+        for (let i = 0; i < 160 * 160; i++) {
+            let val = 0;
+            // Sumamos la activación de los primeros prototipos
+            for(let j = 0; j < 32; j++) {
+                val += maskData[i + (j * 160 * 160)];
+            }
+            val = val / 32; // Promedio
 
-        // Lógica de visualización de segmentación:
-        // Si el valor en el tensor es positivo/alto, significa que ese píxel pertenece al objeto
-        for (let i = 0; i < WIDTH * HEIGHT; i++) {
-            const val = data[i]; 
-            const pixelIndex = i * 4;
-
-            // Si el valor es mayor a un umbral (0.5), pintamos de color Cian neón
-            if (val > 0.5) {
-                rgba[pixelIndex + 0] = 56;  // R
-                rgba[pixelIndex + 1] = 189; // G
-                rgba[pixelIndex + 2] = 248; // B
-                rgba[pixelIndex + 3] = 160; // Opacidad (Alpha)
-            } else {
-                rgba[pixelIndex + 3] = 0;   // Transparente
+            const p = i * 4;
+            if (val > 0.1) { // Umbral de sensibilidad
+                imgOut.data[p + 0] = 0;   // R
+                imgOut.data[p + 1] = 255; // G
+                imgOut.data[p + 2] = 255; // B (Cian)
+                imgOut.data[p + 3] = 180; // Opacidad
             }
         }
-        ctx.putImageData(imgOut, 0, 0);
+
+        // Dibujamos la máscara pequeña y el navegador la estira a 640x640 automáticamente
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = 160;
+        tempCanvas.height = 160;
+        tempCanvas.getContext('2d').putImageData(imgOut, 0, 0);
+        
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(tempCanvas, 0, 0, WIDTH, HEIGHT);
     }
 
     init();
