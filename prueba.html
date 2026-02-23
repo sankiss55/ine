@@ -2,57 +2,31 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Visualizador de Activación IA Correcto</title>
+    <title>IA Segmentación ONNX - Visualizador</title>
     <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #0f172a; color: white; display: flex; flex-direction: column; align-items: center; padding: 20px; }
-        .card { background: #1e293b; padding: 2rem; border-radius: 15px; text-align: center; max-width: 700px; }
-        
-        /* CONTENEDOR DE IMÁGENES APILADAS */
-        .image-stack {
-            position: relative;
-            width: 640px;  /* Ancho fijo para alinear */
-            height: 640px; /* Alto fijo para alinear */
-            margin: 20px auto;
-            border: 2px solid #334155;
-            border-radius: 8px;
-            overflow: hidden;
-            background: #000;
-        }
-        
-        /* Las imágenes se enciman una sobre otra */
-        .stack-layer {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-        }
-        
-        /* El canvas de la IA debe estar arriba y permitir clicks a través de él si fuera necesario */
-        #overlay-canvas {
-            pointer-events: none; 
-            /* mix-blend-mode: screen; Ideal para mapas de calor oscuros */
-        }
-
+        .card { background: #1e293b; padding: 2rem; border-radius: 15px; text-align: center; max-width: 700px; width: 100%; }
+        .image-stack { position: relative; width: 640px; height: 640px; margin: 20px auto; border: 2px solid #38bdf8; border-radius: 8px; background: #000; overflow: hidden; }
+        .stack-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        #overlay-canvas { pointer-events: none; mix-blend-mode: screen; }
+        .btn { background: #38bdf8; color: #0f172a; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-weight: bold; display: inline-block; }
+        #status { margin-top: 15px; font-weight: bold; color: #4ade80; }
         .hidden { display: none; }
-        #status { color: #4ade80; margin-top: 10px; font-weight: bold; }
-        .btn { background: #38bdf8; color: #0f172a; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-weight: bold; display: inline-block; margin-bottom: 20px;}
     </style>
 </head>
 <body>
 
 <div class="card">
-    <h1>IA: Mapa de Captura Visual (Heatmap)</h1>
-    
+    <h1>Detector de Segmentación (INE)</h1>
     <label class="btn">
-        Seleccionar Imagen
+        Subir Imagen de Prueba
         <input type="file" id="fileInput" accept="image/*" style="display:none">
     </label>
-    <p id="status">Cargando modelo...</p>
+    <p id="status">Cargando modelo de segmentación...</p>
 
     <div class="image-stack">
-        <img id="preview-image" class="stack-layer" alt="Vista previa">
+        <img id="preview-image" class="stack-layer">
         <canvas id="overlay-canvas" class="stack-layer"></canvas>
     </div>
 </div>
@@ -60,20 +34,18 @@
 <canvas id="process-canvas" class="hidden"></canvas>
 
 <script>
-    // *** AJUSTA ESTO SI TU MODELO USA OTRAS DIMENSIONES ***
     const WIDTH = 640;
     const HEIGHT = 640;
-    
     const MODEL_PATH = './modelo.onnx'; 
     let session;
 
     async function init() {
         try {
+            // Se recomienda usar WASM para mayor compatibilidad en modelos de segmentación
             session = await ort.InferenceSession.create(MODEL_PATH, { executionProviders: ['wasm'] });
             document.getElementById('status').innerText = "✅ IA Lista. Sube una imagen.";
         } catch (e) {
             alert("Error al cargar modelo: " + e.message);
-            document.getElementById('status').innerText = "❌ Error de modelo.";
         }
     }
 
@@ -81,31 +53,23 @@
         const file = e.target.files[0];
         if (!file) return;
         
-        // Limpiar canvas anterior
-        const canvas = document.getElementById('overlay-canvas');
-        const ctx = canvas.getContext('2d');
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-
         const reader = new FileReader();
         reader.onload = function(event) {
             const img = document.getElementById('preview-image');
             img.src = event.target.result;
-            // Aseguramos que las capas tengan el tamaño correcto
             img.onload = () => {
                  document.getElementById('overlay-canvas').width = WIDTH;
                  document.getElementById('overlay-canvas').height = HEIGHT;
-                 procesarImagen(img);
+                 procesarSegmentacion(img);
             };
         };
         reader.readAsDataURL(file);
     };
 
-    async function procesarImagen(imgElement) {
+    async function procesarSegmentacion(imgElement) {
         const status = document.getElementById('status');
-        if (!session) { alert("Modelo no cargado"); return; }
-        status.innerText = "🧠 Procesando...";
+        status.innerText = "🧠 Segmentando...";
 
-        // 1. Preprocesamiento en canvas oculto
         const procCanvas = document.getElementById('process-canvas');
         procCanvas.width = WIDTH;
         procCanvas.height = HEIGHT;
@@ -115,84 +79,57 @@
         const imageData = ctx.getImageData(0, 0, WIDTH, HEIGHT).data;
         const inputData = new Float32Array(WIDTH * HEIGHT * 3);
         
-        // Normalización estándar (0-1)
+        // Preprocesamiento: CHW format (Channel, Height, Width)
         for (let i = 0, j = 0; i < imageData.length; i += 4) {
-            inputData[j] = imageData[i] / 255.0;           // R
-            inputData[j + WIDTH * HEIGHT] = imageData[i+1] / 255.0; // G
-            inputData[j + 2 * WIDTH * HEIGHT] = imageData[i+2] / 255.0; // B
+            inputData[j] = imageData[i] / 255.0;
+            inputData[j + WIDTH * HEIGHT] = imageData[i+1] / 255.0;
+            inputData[j + 2 * WIDTH * HEIGHT] = imageData[i+2] / 255.0;
             j++;
         }
 
         try {
             const tensor = new ort.Tensor('float32', inputData, [1, 3, HEIGHT, WIDTH]);
-            // RECUERDA: Usa 'images' o 'input' según tu modelo
+            // Nota: Cambia 'images' por el nombre de entrada de tu modelo si es necesario
             const results = await session.run({ images: tensor });
             
-            const outputKey = Object.keys(results)[0];
+            // En modelos de segmentación, la salida suele ser el tensor con mayor tamaño
+            // Buscamos automáticamente la salida que contenga la máscara
+            const outputKey = Object.keys(results).find(key => results[key].data.length > 1000) || Object.keys(results)[0];
             const outputData = results[outputKey].data;
 
-            console.log(`Salida tiene ${outputData.length} valores. Dibujando...`);
-            
-            // 2. DIBUJAR EL RESULTADO CORREGIDO
-            dibujarMapaIA(outputData);
-            status.innerText = "✅ Captura visualizada (Mapa de calor).";
+            dibujarMascara(outputData);
+            status.innerText = "✅ Área captada visualizada.";
 
         } catch (err) {
-            alert("Error Inferencia: " + err.message);
-            status.innerText = "❌ Error.";
+            alert("Error en el modelo: " + err.message);
+            status.innerText = "❌ Error en inferencia.";
         }
     }
 
-    // --- FUNCIÓN CORREGIDA PARA DIBUJAR ---
-    function dibujarMapaIA(data) {
+    function dibujarMascara(data) {
         const canvas = document.getElementById('overlay-canvas');
         const ctx = canvas.getContext('2d');
-        // Limpiamos por si acaso
         ctx.clearRect(0,0, WIDTH, HEIGHT);
 
         const imgOut = ctx.createImageData(WIDTH, HEIGHT);
-        const rgbaData = imgOut.data;
+        const rgba = imgOut.data;
 
-        // Paso A: Encontrar el rango de valores (Min/Max) para normalizar
-        let maxVal = -Infinity;
-        let minVal = Infinity;
-        for (let i = 0; i < data.length; i++) {
-            if (data[i] > maxVal) maxVal = data[i];
-            if (data[i] < minVal) minVal = data[i];
-        }
-        const range = maxVal - minVal + 0.00001; // Evitar división por cero
-
-        // Paso B: Convertir cada valor de la IA en un color RGBA
-        // Asumimos que 'data' es un array plano que corresponde a HxW
-        for (let i = 0; i < data.length; i++) {
-            // Normalizamos el valor entre 0.0 y 1.0
-            const normalized = (data[i] - minVal) / range;
-            
-            // Índice en el array de píxeles RGBA (4 posiciones por píxel)
+        // Lógica de visualización de segmentación:
+        // Si el valor en el tensor es positivo/alto, significa que ese píxel pertenece al objeto
+        for (let i = 0; i < WIDTH * HEIGHT; i++) {
+            const val = data[i]; 
             const pixelIndex = i * 4;
 
-            // --- LÓGICA DE MAPA DE CALOR ROJO ---
-            
-            // Rojo: Siempre al máximo (255) para que se vea "caliente"
-            rgbaData[pixelIndex + 0] = 255; 
-            
-            // Verde y Azul: Disminuyen cuanto mayor es la activación.
-            // (Si normalized es 1, G y B son 0 -> Rojo puro)
-            // (Si normalized es 0, G y B son 255 -> Blanco/Gris)
-            rgbaData[pixelIndex + 1] = Math.floor(255 * (1 - normalized)); 
-            rgbaData[pixelIndex + 2] = Math.floor(255 * (1 - normalized));
-
-            // Alpha (Opacidad): Aquí está la clave.
-            // Solo mostramos las activaciones fuertes. 
-            // Si es menor a 0.3 (30%), lo hacemos totalmente transparente.
-            let opacity = 0;
-            if (normalized > 0.3) {
-                opacity = Math.floor(normalized * 200); // Max opacidad de 200 sobre 255
+            // Si el valor es mayor a un umbral (0.5), pintamos de color Cian neón
+            if (val > 0.5) {
+                rgba[pixelIndex + 0] = 56;  // R
+                rgba[pixelIndex + 1] = 189; // G
+                rgba[pixelIndex + 2] = 248; // B
+                rgba[pixelIndex + 3] = 160; // Opacidad (Alpha)
+            } else {
+                rgba[pixelIndex + 3] = 0;   // Transparente
             }
-            rgbaData[pixelIndex + 3] = opacity;
         }
-
-        // Ponemos la nueva imagen transparente sobre el canvas superior
         ctx.putImageData(imgOut, 0, 0);
     }
 
