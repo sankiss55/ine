@@ -2,233 +2,128 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>YOLOv8 Real-Time INE Scanner</title>
+    <title>YOLOv8 Ultra-Fast Segment</title>
     <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; background: #0f172a; color: white; display: flex; flex-direction: column; align-items: center; margin: 0; padding: 20px; }
-        .container { position: relative; width: 640px; height: 480px; border-radius: 20px; overflow: hidden; border: 4px solid #38bdf8; box-shadow: 0 0 20px rgba(56, 189, 248, 0.3); }
-        #video, #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
-        #overlay { pointer-events: none; z-index: 10; }
-        .status-bar { background: #1e293b; padding: 15px 30px; border-radius: 50px; margin-bottom: 20px; font-weight: bold; border: 1px solid #334155; }
-        .guide-box { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 80%; height: 60%; border: 2px dashed rgba(255,255,255,0.5); border-radius: 15px; pointer-events: none; z-index: 5; }
+        body { font-family: sans-serif; background: #070b14; color: white; display: flex; flex-direction: column; align-items: center; margin: 0; padding: 10px; }
+        .container { position: relative; width: 640px; height: 480px; border-radius: 12px; overflow: hidden; border: 3px solid #0ea5e9; }
+        #video, #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        #overlay { pointer-events: none; }
+        .status { background: rgba(14, 165, 233, 0.2); padding: 10px 20px; border-radius: 20px; margin-bottom: 10px; font-size: 14px; border: 1px solid #0ea5e9; }
     </style>
 </head>
 <body>
 
-    <div class="status-bar" id="status">Iniciando Cámara...</div>
+    <div class="status" id="status">Cargando IA...</div>
 
     <div class="container">
         <video id="video" autoplay playsinline muted></video>
         <canvas id="overlay"></canvas>
-        <div class="guide-box"></div>
     </div>
 
 <script>
     const video = document.getElementById('video');
     const canvas = document.getElementById('overlay');
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { alpha: true });
     const status = document.getElementById('status');
     
-    let session;
+    // Configuración de optimización
     const WIDTH = 640;
     const HEIGHT = 640;
+    const CONFIDENCIA_SEG = 0.9; // <--- 90% de validación
+    let session;
+    let frameCount = 0;
 
-    async function setupWebcam() {
-        const stream = await navigator.mediaDevices.getUserMedia({ 
-            video: { facingMode: "environment", width: 640, height: 480 }, 
-            audio: false 
-        });
-        video.srcObject = stream;
-        return new Promise((resolve) => video.onloadedmetadata = resolve);
-    }
+    // Canvas oculto reutilizable para no saturar la memoria
+    const offscreenCanvas = document.createElement('canvas');
+    offscreenCanvas.width = WIDTH;
+    offscreenCanvas.height = HEIGHT;
+    const offCtx = offscreenCanvas.getContext('2d', { willReadFrequently: true });
 
     async function init() {
         try {
-            // Se recomienda usar el modelo cuantizado (.onnx) para que corra fluido en web
+            // Usamos 'wasm' pero con hilos optimizados si están disponibles
             session = await ort.InferenceSession.create('./best.onnx', { 
-                executionProviders: ['wasm'], // 'webgl' es más rápido pero a veces inestable con segmentación
-                graphOptimizationLevel: 'all' 
+                executionProviders: ['wasm'],
+                graphOptimizationLevel: 'all'
             });
-            status.innerText = "🚀 IA Lista: Coloca el INE frente a la cámara";
-            status.style.color = "#38bdf8";
             
-            await setupWebcam();
-            predict(); // Iniciar bucle
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: "environment", width: 640, height: 480 } 
+            });
+            video.srcObject = stream;
+            video.onloadedmetadata = () => {
+                status.innerText = "⚡ Validando al 90% - Tiempo Real";
+                predict();
+            };
         } catch (e) {
             status.innerText = "❌ Error: " + e.message;
         }
     }
 
     async function predict() {
-        // 1. Dibujar frame actual en un canvas oculto para pre-procesamiento
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = WIDTH;
-        tempCanvas.height = HEIGHT;
-        const tempCtx = tempCanvas.getContext('2d');
-        tempCtx.drawImage(video, 0, 0, WIDTH, HEIGHT);
-        
-        const imageData = tempCtx.getImageData(0, 0, WIDTH, HEIGHT).data;
-        const input = new Float32Array(WIDTH * HEIGHT * 3);
-
-        // 2. Pre-procesamiento (Normalización y transposición a NCHW)
-        for (let i = 0, j = 0; i < imageData.length; i += 4) {
-            input[j] = imageData[i] / 255.0;
-            input[j + WIDTH * HEIGHT] = imageData[i+1] / 255.0;
-            input[j + 2 * WIDTH * HEIGHT] = imageData[i+2] / 255.0;
-            j++;
-        }
-
-        const tensor = new ort.Tensor('float32', input, [1, 3, HEIGHT, WIDTH]);
-        
-        try {
-            const results = await session.run({ images: tensor });
-            const outputNames = Object.keys(results);
+        // OPTIMIZACIÓN: Solo procesar 1 de cada 2 frames para ganar velocidad (30fps -> 15fps de inferencia)
+        // El video se sigue viendo a 60fps, pero la IA descansa un poco.
+        if (frameCount % 2 === 0) {
+            offCtx.drawImage(video, 0, 0, WIDTH, HEIGHT);
+            const imgData = offCtx.getImageData(0, 0, WIDTH, HEIGHT).data;
             
-            // Ajusta el índice según tu modelo (usualmente el tensor de máscaras es el de mayor tamaño)
-            const maskData = results[outputNames[1]].data; 
-            renderMask(maskData);
-            
-        } catch (e) {
-            console.error(e);
-        }
+            // Pre-proceso ultra rápido
+            const input = new Float32Array(WIDTH * HEIGHT * 3);
+            const area = WIDTH * HEIGHT;
+            for (let i = 0; i < area; i++) {
+                input[i] = imgData[i * 4] / 255.0;           // R
+                input[i + area] = imgData[i * 4 + 1] / 255.0; // G
+                input[i + 2 * area] = imgData[i * 4 + 2] / 255.0; // B
+            }
 
-        // 3. Siguiente frame
+            const tensor = new ort.Tensor('float32', input, [1, 3, HEIGHT, WIDTH]);
+            
+            try {
+                const results = await session.run({ images: tensor });
+                const outputNames = Object.keys(results);
+                // Buscamos el tensor de prototipos/máscaras
+                const maskData = results[outputNames[1]].data; 
+                renderFast(maskData);
+            } catch (e) {}
+        }
+        
+        frameCount++;
         requestAnimationFrame(predict);
     }
 
-    function renderMask(maskData) {
+    function renderFast(maskData) {
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // Usamos un canvas pequeño para la máscara y dejamos que el navegador la escale (muy rápido)
+        const maskSize = 160;
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = maskSize;
+        tempCanvas.height = maskSize;
+        const tCtx = tempCanvas.getContext('2d');
+        const imgOut = tCtx.createImageData(maskSize, maskSize);
 
-        // Crear máscara visual
-        const maskCanvas = document.createElement('canvas');
-        maskCanvas.width = 160;
-        maskCanvas.height = 160;
-        const mCtx = maskCanvas.getContext('2d');
-        const imgOut = mCtx.createImageData(160, 160);
-
-        for (let i = 0; i < 160 * 160; i++) {
+        for (let i = 0; i < maskSize * maskSize; i++) {
             let val = 0;
-            for(let j = 0; j < 32; j++) val += maskData[i + (j * 160 * 160)];
+            // Suma de prototipos
+            for(let j = 0; j < 32; j++) val += maskData[i + (j * maskSize * maskSize)];
             val = val / 32;
 
             const p = i * 4;
-            if (val > 0.5) { // Ajusta el umbral (Threshold)
-                imgOut.data[p + 0] = 56;  // R
-                imgOut.data[p + 1] = 189; // G
-                imgOut.data[p + 2] = 248; // B
-                imgOut.data[p + 3] = 150; // Alpha
-            }
-        }
-        
-        mCtx.putImageData(imgOut, 0, 0);
-        
-        // Estirar la máscara al tamaño real del video
-        ctx.globalAlpha = 0.6;
-        ctx.drawImage(maskCanvas, 0, 0, canvas.width, canvas.height);
-    }
-
-    init();
-</script>
-</body>
-</html>
-    async function init() {
-        try {
-            // Usamos WASM para mayor estabilidad con modelos de segmentación
-            session = await ort.InferenceSession.create('./best.onnx', { executionProviders: ['wasm'] });
-            document.getElementById('status').innerText = "✅ Modelo ONNX Cargado";
-        } catch (e) {
-            document.getElementById('status').innerText = "❌ Error: " + e.message;
-        }
-    }
-
-    document.getElementById('fileInput').onchange = (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = (ev) => {
-            const img = document.getElementById('preview');
-            img.src = ev.target.result;
-            img.onload = () => procesar(img);
-        };
-        reader.readAsDataURL(file);
-    };
-
-    async function procesar(imgElement) {
-        const status = document.getElementById('status');
-        status.innerText = "🧠 Analizando...";
-
-        // 1. Crear canvas temporal para redimensionar a 640x640
-        const canvas = document.createElement('canvas');
-        canvas.width = WIDTH;
-        canvas.height = HEIGHT;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(imgElement, 0, 0, WIDTH, HEIGHT);
-        const imageData = ctx.getImageData(0, 0, WIDTH, HEIGHT).data;
-
-        // 2. Formato BCHW (1, 3, 640, 640)
-        const input = new Float32Array(WIDTH * HEIGHT * 3);
-        for (let i = 0, j = 0; i < imageData.length; i += 4) {
-            input[j] = imageData[i] / 255.0;
-            input[j + WIDTH * HEIGHT] = imageData[i+1] / 255.0;
-            input[j + 2 * WIDTH * HEIGHT] = imageData[i+2] / 255.0;
-            j++;
-        }
-
-        try {
-            const tensor = new ort.Tensor('float32', input, [1, 3, HEIGHT, WIDTH]);
-            const results = await session.run({ images: tensor });
-
-            // 3. Capturar la salida de prototipos (la de 160x160)
-            // Según tu log, es la que tiene 32 * 160 * 160 = 819,200 valores (o similar)
-            const outputNames = Object.keys(results);
-            // Buscamos el tensor que tiene la forma de máscara (normalmente el segundo)
-            const maskData = results[outputNames[1]].data; 
-
-            dibujarMascara(maskData);
-            status.innerText = "✅ INE Detectada";
-        } catch (err) {
-            status.innerText = "❌ Error en inferencia";
-            console.error(err);
-        }
-    }
-
-    function dibujarMascara(maskData) {
-        const canvas = document.getElementById('overlay');
-        const ctx = canvas.getContext('2d');
-        canvas.width = WIDTH;
-        canvas.height = HEIGHT;
-        ctx.clearRect(0, 0, WIDTH, HEIGHT);
-
-        const imgOut = ctx.createImageData(160, 160); // Tamaño del prototipo
-        
-        // Vamos a promediar las 32 capas de prototipos para ver la "activación"
-        for (let i = 0; i < 160 * 160; i++) {
-            let val = 0;
-            // Sumamos la activación de los primeros prototipos
-            for(let j = 0; j < 32; j++) {
-                val += maskData[i + (j * 160 * 160)];
-            }
-            val = val / 32; // Promedio
-
-            const p = i * 4;
-            if (val > 0.8) { // Umbral de sensibilidad
+            // APLICANDO VALIDACIÓN DEL 90%
+            if (val > CONFIDENCIA_SEG) { 
                 imgOut.data[p + 0] = 0;   // R
-                imgOut.data[p + 1] = 255; // G
-                imgOut.data[p + 2] = 255; // B (Cian)
-                imgOut.data[p + 3] = 180; // Opacidad
+                imgOut.data[p + 1] = 255; // G (Verde brillante para éxito)
+                imgOut.data[p + 2] = 127; // B
+                imgOut.data[p + 3] = 200; // Opacidad alta
             }
         }
-
-        // Dibujamos la máscara pequeña y el navegador la estira a 640x640 automáticamente
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = 160;
-        tempCanvas.height = 160;
-        tempCanvas.getContext('2d').putImageData(imgOut, 0, 0);
         
+        tCtx.putImageData(imgOut, 0, 0);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.imageSmoothingEnabled = true;
-        ctx.drawImage(tempCanvas, 0, 0, WIDTH, HEIGHT);
+        ctx.drawImage(tempCanvas, 0, 0, canvas.width, canvas.height);
     }
 
     init();
