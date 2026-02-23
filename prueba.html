@@ -114,7 +114,7 @@
             val = val / 32; // Promedio
 
             const p = i * 4;
-            if (val > 0.1) { // Umbral de sensibilidad
+            if (val > 0.8) { // Umbral de sensibilidad
                 imgOut.data[p + 0] = 0;   // R
                 imgOut.data[p + 1] = 255; // G
                 imgOut.data[p + 2] = 255; // B (Cian)
