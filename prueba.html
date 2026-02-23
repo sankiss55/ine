@@ -2,24 +2,114 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Detección YOLO - Subir Imagen</title>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IA ONNX con Alertas</title>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
     <style>
-        .container { position: relative; margin-top: 20px; }
-        canvas { position: absolute; left: 0; top: 0; }
-        #imagePreview { max-width: 500px; display: block; }
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; background: #f0f2f5; padding: 20px; }
+        .card { background: white; padding: 2rem; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center; }
+        .btn-upload { background: #007bff; color: white; padding: 10px 20px; border-radius: 5px; cursor: pointer; display: inline-block; margin-top: 10px; }
+        #preview { max-width: 300px; margin-top: 20px; display: none; border-radius: 5px; }
+        canvas { display: none; }
     </style>
 </head>
 <body>
-    <h1>Analizar Imagen con YOLO</h1>
-    <input type="file" id="fileInput" accept="image/*">
-    <p id="status">Cargando modelo...</p>
 
-    <div class="container">
-        <img id="imagePreview" />
-        <canvas id="canvas"></canvas>
-    </div>
+<div class="card">
+    <h1>Analizador de Imagen ONNX</h1>
+    <p id="status">Cargando motor de IA...</p>
+    
+    <label class="btn-upload">
+        Seleccionar Imagen
+        <input type="file" id="fileInput" accept="image/*" style="display:none">
+    </label>
 
-    <script type="module" src="index.js"></script>
+    <br>
+    <img id="preview">
+    <canvas id="canvas"></canvas>
+</div>
+
+<script>
+    const MODEL_PATH = './modelo.onnx'; 
+    const WIDTH = 224;  // Ajusta según tu modelo
+    const HEIGHT = 224; // Ajusta según tu modelo
+    let session;
+
+    // 1. Cargar el modelo con alerta si falla
+    async function init() {
+        try {
+            session = await ort.InferenceSession.create(MODEL_PATH, { executionProviders: ['wasm'] });
+            document.getElementById('status').innerText = "✅ Modelo cargado correctamente";
+        } catch (e) {
+            alert("ERROR AL CARGAR EL MODELO: " + e.message + "\n\nVerifica que el archivo 'modelo.onnx' esté en la misma carpeta y estés usando un servidor local.");
+            document.getElementById('status').innerText = "❌ Error en el modelo";
+        }
+    }
+
+    // 2. Procesar imagen al subirla
+    document.getElementById('fileInput').onchange = function(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = function(event) {
+            const img = document.getElementById('preview');
+            img.src = event.target.result;
+            img.style.display = 'block';
+            img.onload = () => ejecutarIA(img);
+        };
+        reader.onerror = () => alert("Error al leer el archivo de imagen.");
+        reader.readAsDataURL(file);
+    };
+
+    // 3. Inferencia con alertas
+    async function ejecutarIA(imgElement) {
+        if (!session) {
+            alert("La IA aún no está lista o no se pudo cargar.");
+            return;
+        }
+
+        try {
+            const canvas = document.getElementById('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = WIDTH;
+            canvas.height = HEIGHT;
+            
+            // Dibujar y extraer píxeles
+            ctx.drawImage(imgElement, 0, 0, WIDTH, HEIGHT);
+            const imageData = ctx.getImageData(0, 0, WIDTH, HEIGHT).data;
+
+            // Preprocesar (Normalización básica 0-1)
+            const inputData = new Float32Array(WIDTH * HEIGHT * 3);
+            for (let i = 0, j = 0; i < imageData.length; i += 4) {
+                inputData[j] = imageData[i] / 255.0;           // R
+                inputData[j + WIDTH * HEIGHT] = imageData[i+1] / 255.0; // G
+                inputData[j + 2 * WIDTH * HEIGHT] = imageData[i+2] / 255.0; // B
+                j++;
+            }
+
+            // Crear Tensor
+            const tensor = new ort.Tensor('float32', inputData, [1, 3, HEIGHT, WIDTH]);
+
+            // Ejecutar (Cambia 'input' por el nombre real de tu nodo de entrada)
+            const feeds = { input: tensor }; 
+            const results = await session.run(feeds);
+
+            // Obtener salida
+            const output = results[Object.keys(results)[0]].data;
+            
+            // Mostrar resultado exitoso
+            alert("¡PROCESADO CON ÉXITO!\nPrimeros valores de salida:\n" + output.slice(0, 5).join(", "));
+            console.log("Salida completa:", output);
+
+        } catch (error) {
+            alert("ERROR DURANTE LA INFERENCIA:\n" + error.message + 
+                  "\n\nPosible causa: El nombre del nodo de entrada no es 'input' o las dimensiones no coinciden.");
+        }
+    }
+
+    init();
+</script>
+
 </body>
 </html>
