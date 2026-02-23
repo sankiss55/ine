@@ -3,37 +3,124 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>IA ONNX con Alertas</title>
+    <title>IA ONNX Vision - Sankiss55</title>
     <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
     <style>
-        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; background: #f0f2f5; padding: 20px; }
-        .card { background: white; padding: 2rem; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center; }
-        .btn-upload { background: #007bff; color: white; padding: 10px 20px; border-radius: 5px; cursor: pointer; display: inline-block; margin-top: 10px; }
-        #preview { max-width: 300px; margin-top: 20px; display: none; border-radius: 5px; }
+        body { font-family: 'Segoe UI', sans-serif; background: #0f172a; color: white; display: flex; flex-direction: column; align-items: center; padding: 20px; }
+        .card { background: #1e293b; padding: 2rem; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); text-align: center; max-width: 500px; width: 100%; }
+        h1 { color: #38bdf8; margin-bottom: 10px; }
+        .upload-btn { background: #38bdf8; color: #0f172a; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-weight: bold; display: inline-block; transition: 0.3s; }
+        .upload-btn:hover { background: #7dd3fc; }
+        #preview { max-width: 100%; margin-top: 20px; border-radius: 10px; display: none; border: 2px solid #334155; }
+        #status { margin-top: 15px; font-size: 0.9rem; color: #94a3b8; }
         canvas { display: none; }
     </style>
 </head>
 <body>
 
 <div class="card">
-    <h1>Analizador de Imagen ONNX</h1>
+    <h1>Analizador ONNX</h1>
     <p id="status">Cargando motor de IA...</p>
     
-    <label class="btn-upload">
+    <label class="upload-btn">
         Seleccionar Imagen
         <input type="file" id="fileInput" accept="image/*" style="display:none">
     </label>
 
-    <br>
-    <img id="preview">
+    <img id="preview" alt="Vista previa">
     <canvas id="canvas"></canvas>
 </div>
 
 <script>
+    // --- CONFIGURACIÓN CRÍTICA ---
     const MODEL_PATH = './modelo.onnx'; 
-    const WIDTH = 224;  // Ajusta según tu modelo
-    const HEIGHT = 224; // Ajusta según tu modelo
+    const WIDTH = 640;  // Si falla por dimensiones, prueba 224 o 320
+    const HEIGHT = 640; 
     let session;
+
+    // 1. Inicializar Modelo
+    async function init() {
+        try {
+            // Intentamos usar WebGL para velocidad, si no WASM
+            session = await ort.InferenceSession.create(MODEL_PATH, { 
+                executionProviders: ['wasm'] 
+            });
+            document.getElementById('status').innerText = "✅ IA Lista para procesar";
+        } catch (e) {
+            alert("ERROR AL CARGAR MODELO:\n" + e.message + "\n\nVerifica que el archivo esté en el servidor.");
+            document.getElementById('status').innerText = "❌ Error de carga";
+        }
+    }
+
+    // 2. Escuchar subida de imagen
+    document.getElementById('fileInput').onchange = function(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = function(event) {
+            const img = document.getElementById('preview');
+            img.src = event.target.result;
+            img.style.display = 'block';
+            img.onload = () => procesarImagen(img);
+        };
+        reader.readAsDataURL(file);
+    };
+
+    // 3. Inferencia
+    async function procesarImagen(imgElement) {
+        if (!session) {
+            alert("La sesión de IA no se ha iniciado.");
+            return;
+        }
+
+        try {
+            const canvas = document.getElementById('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = WIDTH;
+            canvas.height = HEIGHT;
+            
+            // Dibujamos la imagen reescalada al tamaño que pide el modelo
+            ctx.drawImage(imgElement, 0, 0, WIDTH, HEIGHT);
+            const imageData = ctx.getImageData(0, 0, WIDTH, HEIGHT).data;
+
+            // Preprocesamiento: Convertir de [R,G,B,A, R,G,B,A...] a [R,R... G,G... B,B...]
+            const inputData = new Float32Array(WIDTH * HEIGHT * 3);
+            for (let i = 0, j = 0; i < imageData.length; i += 4) {
+                // Normalización a 0-1 (típica de ONNX)
+                inputData[j] = imageData[i] / 255.0;                         // Canal R
+                inputData[j + WIDTH * HEIGHT] = imageData[i + 1] / 255.0;     // Canal G
+                inputData[j + 2 * WIDTH * HEIGHT] = imageData[i + 2] / 255.0; // Canal B
+                j++;
+            }
+
+            // Crear el Tensor con la forma [Batch, Canales, Alto, Ancho]
+            const tensor = new ort.Tensor('float32', inputData, [1, 3, HEIGHT, WIDTH]);
+
+            // USAMOS EL NOMBRE 'images' QUE TU MODELO SOLICITA
+            const feeds = { images: tensor }; 
+            
+            const results = await session.run(feeds);
+
+            // Obtener la primera salida disponible
+            const outputKey = Object.keys(results)[0];
+            const outputData = results[outputKey].data;
+
+            // ALERTA DE ÉXITO
+            alert("¡INFERENCIA EXITOSA!\n\nEl modelo devolvió " + outputData.length + " valores.\nRevisa la consola (F12) para ver el array completo.");
+            console.log("Salida completa del modelo:", outputData);
+
+        } catch (error) {
+            alert("ERROR DURANTE LA INFERENCIA:\n" + error.message + 
+                  "\n\nSi el error persiste, verifica si el modelo requiere dimensiones distintas a " + WIDTH + "x" + HEIGHT);
+        }
+    }
+
+    init();
+</script>
+
+</body>
+</html>
 
     // 1. Cargar el modelo con alerta si falla
     async function init() {
