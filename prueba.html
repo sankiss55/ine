@@ -2,19 +2,19 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>YOLOv8 Ultra-Fast Segment</title>
+    <title>YOLOv8 Real-Time INE Detector</title>
     <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
     <style>
         body { font-family: sans-serif; background: #070b14; color: white; display: flex; flex-direction: column; align-items: center; margin: 0; padding: 10px; }
-        .container { position: relative; width: 640px; height: 480px; border-radius: 12px; overflow: hidden; border: 3px solid #0ea5e9; }
-        #video, #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
-        #overlay { pointer-events: none; }
-        .status { background: rgba(14, 165, 233, 0.2); padding: 10px 20px; border-radius: 20px; margin-bottom: 10px; font-size: 14px; border: 1px solid #0ea5e9; }
+        .container { position: relative; width: 640px; height: 480px; border-radius: 12px; overflow: hidden; border: 3px solid #0ea5e9; box-shadow: 0 0 20px rgba(14, 165, 233, 0.3); }
+        #video, #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
+        #overlay { pointer-events: none; z-index: 10; }
+        .status { background: rgba(14, 165, 233, 0.2); padding: 10px 20px; border-radius: 20px; margin-bottom: 10px; font-size: 14px; border: 1px solid #0ea5e9; font-weight: bold; color: #38bdf8; }
     </style>
 </head>
 <body>
 
-    <div class="status" id="status">Cargando IA...</div>
+    <div class="status" id="status">Iniciando Cámara e IA...</div>
 
     <div class="container">
         <video id="video" autoplay playsinline muted></video>
@@ -27,14 +27,13 @@
     const ctx = canvas.getContext('2d', { alpha: true });
     const status = document.getElementById('status');
     
-    // Configuración de optimización
     const WIDTH = 640;
     const HEIGHT = 640;
-    const CONFIDENCIA_SEG = 0.9; // <--- 90% de validación
+    const CONF_THRESHOLD = 0.90; // Validación estricta al 90%
+    const IOU_THRESHOLD = 0.45;
     let session;
     let frameCount = 0;
 
-    // Canvas oculto reutilizable para no saturar la memoria
     const offscreenCanvas = document.createElement('canvas');
     offscreenCanvas.width = WIDTH;
     offscreenCanvas.height = HEIGHT;
@@ -42,7 +41,6 @@
 
     async function init() {
         try {
-            // Usamos 'wasm' pero con hilos optimizados si están disponibles
             session = await ort.InferenceSession.create('./best.onnx', { 
                 executionProviders: ['wasm'],
                 graphOptimizationLevel: 'all'
@@ -53,7 +51,7 @@
             });
             video.srcObject = stream;
             video.onloadedmetadata = () => {
-                status.innerText = "⚡ Validando al 90% - Tiempo Real";
+                status.innerText = "🚀 IA ACTIVA: Buscando INE (90% Confianza)";
                 predict();
             };
         } catch (e) {
@@ -62,68 +60,115 @@
     }
 
     async function predict() {
-        // OPTIMIZACIÓN: Solo procesar 1 de cada 2 frames para ganar velocidad (30fps -> 15fps de inferencia)
-        // El video se sigue viendo a 60fps, pero la IA descansa un poco.
+        // Procesamos 1 de cada 2 frames para estabilidad
         if (frameCount % 2 === 0) {
             offCtx.drawImage(video, 0, 0, WIDTH, HEIGHT);
             const imgData = offCtx.getImageData(0, 0, WIDTH, HEIGHT).data;
             
-            // Pre-proceso ultra rápido
             const input = new Float32Array(WIDTH * HEIGHT * 3);
-            const area = WIDTH * HEIGHT;
-            for (let i = 0; i < area; i++) {
+            for (let i = 0; i < WIDTH * HEIGHT; i++) {
                 input[i] = imgData[i * 4] / 255.0;           // R
-                input[i + area] = imgData[i * 4 + 1] / 255.0; // G
-                input[i + 2 * area] = imgData[i * 4 + 2] / 255.0; // B
+                input[i + WIDTH * HEIGHT] = imgData[i * 4 + 1] / 255.0; // G
+                input[i + 2 * WIDTH * HEIGHT] = imgData[i * 4 + 2] / 255.0; // B
             }
 
             const tensor = new ort.Tensor('float32', input, [1, 3, HEIGHT, WIDTH]);
             
             try {
                 const results = await session.run({ images: tensor });
-                const outputNames = Object.keys(results);
-                // Buscamos el tensor de prototipos/máscaras
-                const maskData = results[outputNames[1]].data; 
-                renderFast(maskData);
-            } catch (e) {}
+                const output = results[Object.keys(results)[0]].data;
+
+                // Extraemos cajas con la lógica de transposición de YOLOv8
+                const boxes = extractBoxes(output);
+                renderBoxes(boxes);
+            } catch (e) {
+                console.error("Error inferencia:", e);
+            }
         }
         
         frameCount++;
         requestAnimationFrame(predict);
     }
 
-    function renderFast(maskData) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
+    function extractBoxes(data) {
+        const detections = [];
+        const numRows = 8400; // Candidatos estándar YOLOv8
         
-        // Usamos un canvas pequeño para la máscara y dejamos que el navegador la escale (muy rápido)
-        const maskSize = 160;
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = maskSize;
-        tempCanvas.height = maskSize;
-        const tCtx = tempCanvas.getContext('2d');
-        const imgOut = tCtx.createImageData(maskSize, maskSize);
+        for (let i = 0; i < numRows; i++) {
+            const prob = data[4 * numRows + i]; // Probabilidad clase 0 (INE)
 
-        for (let i = 0; i < maskSize * maskSize; i++) {
-            let val = 0;
-            // Suma de prototipos
-            for(let j = 0; j < 32; j++) val += maskData[i + (j * maskSize * maskSize)];
-            val = val / 32;
+            if (prob > CONF_THRESHOLD) {
+                const cx = data[0 * numRows + i];
+                const cy = data[1 * numRows + i];
+                const w = data[2 * numRows + i];
+                const h = data[3 * numRows + i];
 
-            const p = i * 4;
-            // APLICANDO VALIDACIÓN DEL 90%
-            if (val > CONFIDENCIA_SEG) { 
-                imgOut.data[p + 0] = 0;   // R
-                imgOut.data[p + 1] = 255; // G (Verde brillante para éxito)
-                imgOut.data[p + 2] = 127; // B
-                imgOut.data[p + 3] = 200; // Opacidad alta
+                detections.push({
+                    x: (cx - w / 2),
+                    y: (cy - h / 2),
+                    w: w,
+                    h: h,
+                    prob: prob
+                });
             }
         }
-        
-        tCtx.putImageData(imgOut, 0, 0);
+        return nms(detections, IOU_THRESHOLD);
+    }
+
+    function nms(boxes, threshold) {
+        boxes.sort((a, b) => b.prob - a.prob);
+        const result = [];
+        const used = new Array(boxes.length).fill(false);
+
+        for (let i = 0; i < boxes.length; i++) {
+            if (used[i]) continue;
+            result.push(boxes[i]);
+            for (let j = i + 1; j < boxes.length; j++) {
+                if (!used[j] && calculateIoU(boxes[i], boxes[j]) > threshold) {
+                    used[j] = true;
+                }
+            }
+        }
+        return result;
+    }
+
+    function calculateIoU(a, b) {
+        const x1 = Math.max(a.x, b.x);
+        const y1 = Math.max(a.y, b.y);
+        const x2 = Math.min(a.x + a.w, b.x + b.w);
+        const y2 = Math.min(a.y + a.h, b.y + b.h);
+        const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+        const union = a.w * a.h + b.w * b.h - inter;
+        return inter / union;
+    }
+
+    function renderBoxes(boxes) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.imageSmoothingEnabled = true;
-        ctx.drawImage(tempCanvas, 0, 0, canvas.width, canvas.height);
+
+        // Factores de escala para ajustar el 640x640 de la IA al tamaño real del video
+        const scaleX = canvas.width / WIDTH;
+        const scaleY = canvas.height / HEIGHT;
+
+        boxes.forEach(box => {
+            const x = box.x * scaleX;
+            const y = box.y * scaleY;
+            const w = box.w * scaleX;
+            const h = box.h * scaleY;
+
+            // Dibujar rectángulo
+            ctx.strokeStyle = '#00ffcc';
+            ctx.lineWidth = 4;
+            ctx.strokeRect(x, y, w, h);
+            
+            // Etiqueta
+            ctx.fillStyle = '#00ffcc';
+            ctx.fillRect(x, y - 25, 100, 25);
+            ctx.fillStyle = '#000';
+            ctx.font = 'bold 14px sans-serif';
+            ctx.fillText(`INE ${(box.prob * 100).toFixed(0)}%`, x + 5, y - 7);
+        });
     }
 
     init();
